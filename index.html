@@ -93,6 +93,15 @@ input,textarea,select{font:inherit;color:inherit}
   .savestate{width:100%;min-height:0;order:9}
 }
 
+/* ---------- full-screen phone on small screens ---------- */
+body.fullphone .studio{padding:0;gap:0}
+body.fullphone .rail{padding:8px max(12px,env(safe-area-inset-left,0px)) 8px max(12px,env(safe-area-inset-right,0px))}
+body.fullphone.viewer .rail{display:none}
+body.fullphone .stage{align-items:flex-start;background:#000}
+body.fullphone .phone{width:390px;height:844px;padding:0;border-radius:0;background:none;box-shadow:none}
+body.fullphone .screen{border-radius:0}
+body.fullphone.viewer{background:#000}
+
 /* ---------- device frame ---------- */
 .phone{position:absolute;top:0;left:0;width:414px;height:868px;transform-origin:0 0;border-radius:66px;background:#17171b;padding:12px;box-shadow:inset 0 0 0 2px #3b3b42,inset 0 0 0 5px #0b0b0d,0 40px 70px -30px rgba(15,16,35,.55)}
 .screen{position:relative;width:390px;height:844px;border-radius:54px;overflow:hidden;background:#000;font-family:var(--f-phone);font-size:17px;line-height:1.35;color:var(--ios-ink);-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
@@ -490,8 +499,8 @@ input,textarea,select{font:inherit;color:inherit}
 'use strict';
 const STANDALONE = true;
 const VIEWER_DATA = null;
-const VIEWER = VIEWER_DATA!=null;
-const PAGE_SRC = STANDALONE&&!VIEWER ? '<!doctype html>\n'+document.documentElement.outerHTML : '';
+let VIEWER = VIEWER_DATA!=null;
+const isViewHash=h=>/^v[01]\.[A-Za-z0-9_-]+$/.test(h||'');
 const ARTIFACT_URL = 'https://claude.ai/artifact/AnpAqNwcTTty3DBtc3NHHv';
 
 /* ---------------- constants ---------------- */
@@ -697,13 +706,30 @@ async function uploadImage(file){
 /* ---------------- files: download + zip ---------------- */
 function saveBlob(blob,name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},2000); }
 const safeName=n=>String(n||'phone').replace(/[\\/:*?"<>|]/g,'_').trim()||'phone';
-function exportZip(d){
- if(!PAGE_SRC){toast('여기서는 내보낼 수 없어요.');return;}
- const json=JSON.stringify(d).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
- let html=PAGE_SRC.replace('const VIEWER'+'_DATA = null;',()=>'const VIEWER'+'_DATA = '+json+';');
- html=html.replace(/<title>[^<]*<\/title>/,()=>'<title>'+esc(d.name||'OC Phone')+'</title>');
- saveBlob(new Blob([html],{type:'text/html;charset=utf-8'}),safeName(d.name)+'.html');
- toast('보기 전용 HTML 파일을 만들었어요.');
+function b64u(bytes){let bin='';for(let i=0;i<bytes.length;i+=0x8000)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000));return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function unb64u(str){const bin=atob(str.replace(/-/g,'+').replace(/_/g,'/'));const out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out;}
+async function packPhone(d){
+ const bytes=new TextEncoder().encode(JSON.stringify(d));
+ if(window.CompressionStream){ try{ const st=new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate')); return 'v1.'+b64u(new Uint8Array(await new Response(st).arrayBuffer())); }catch(e){} }
+ return 'v0.'+b64u(bytes);
+}
+async function unpackPhone(h){
+ let bytes=unb64u(h.slice(3));
+ if(h.startsWith('v1.')){ const st=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate')); bytes=new Uint8Array(await new Response(st).arrayBuffer()); }
+ return JSON.parse(new TextDecoder().decode(bytes));
+}
+function stripLocalImages(o){ let n=0; const walk=x=>{ if(Array.isArray(x)) x.forEach((v,i)=>{ if(typeof v==='string'&&v.startsWith('data:')){x[i]='';n++;} else if(v&&typeof v==='object') walk(v); }); else for(const k in x){ const v=x[k]; if(typeof v==='string'&&v.startsWith('data:')){x[k]='';n++;} else if(v&&typeof v==='object') walk(v); } }; walk(o); return n; }
+async function makeViewLink(d){
+ const data=clone(d); const dropped=stripLocalImages(data);
+ const base=location.href.split('#')[0];
+ const url=base+'#'+(await packPhone(data));
+ const online=/^https?:/.test(location.protocol);
+ pushSheet({title:'보기 전용 링크',html:()=>`
+  ${online?'':'<p class="sh-note">지금은 사이트가 아닌 파일로 열려 있어서 이 링크는 다른 사람에게 열리지 않아요. GitHub Pages에 올린 주소에서 다시 만들어 주세요.</p>'}
+  <p class="sh-note">이 링크를 열면 휴대폰이 보기 전용으로 실행돼요. 고치거나 새로 만들 수는 없어요. 휴대폰 내용이 링크 안에 담겨 있어서, 나중에 내용을 바꾸면 링크를 새로 만들어 보내야 해요.${dropped?`\n\n직접 올린 사진 ${dropped}장은 너무 커서 링크에 담지 못하고 빠졌어요. 링크에서도 사진이 보이게 하려면 사진을 고를 때 ‘주소로 넣기’로 인터넷에 올린 사진 주소를 넣어 주세요.`:''}</p>
+  <div class="fld"><label for="linkbox">링크 (${url.length.toLocaleString()}자)</label><textarea class="linkbox" id="linkbox" rows="4" readonly>${esc(url)}</textarea></div>
+  <div class="menu"><button class="btn primary row" style="justify-content:center" data-a="copyView">링크 복사</button>${navigator.share?'<button class="btn row" style="justify-content:center" data-a="shareView">다른 앱으로 보내기</button>':''}<a class="btn row" style="justify-content:center;text-decoration:none" href="${esc(url)}" target="_blank" rel="noopener">새 창에서 열어 보기</a></div>`,
+  url,name:d.name});
 }
 
 /* ---------------- sheets (editors) ---------------- */
@@ -731,7 +757,7 @@ function fieldHtml(f,v){
  if(f.t==='image'||f.t==='wall'||f.t==='bg'){
   return `<div class="fld"><label>${esc(f.l)}</label><input type="hidden" id="${id}" value="${esc(v||'')}">
    <div class="imgf"><div class="imgprev ${f.t==='wall'?'wall':''}" id="pv_${f.k}" data-t="${f.t}" style="background:${esc(prevCss(f.t,v))}"></div>
-   <div class="imgbtns"><button type="button" class="btn sm" data-a="pickImg" data-k="${f.k}">사진 고르기</button>${f.t==='image'?`<button type="button" class="btn sm ghost" data-a="clearImg" data-k="${f.k}">지우기</button>`:''}</div></div>
+   <div class="imgbtns"><button type="button" class="btn sm" data-a="pickImg" data-k="${f.k}">사진 고르기</button>${STANDALONE?`<button type="button" class="btn sm ghost" data-a="urlImg" data-k="${f.k}">주소로 넣기</button>`:''}${f.t==='image'?`<button type="button" class="btn sm ghost" data-a="clearImg" data-k="${f.k}">지우기</button>`:''}</div></div>
    ${f.t!=='image'?`<div class="swatches">${GRADS.map((g,i)=>`<button type="button" class="sw" data-a="setSw" data-k="${f.k}" data-v="g:${i}" style="background:${g}" aria-label="배경 ${i+1}"></button>`).join('')}${f.t==='bg'?`<input type="color" class="cpick" data-k="${f.k}" aria-label="색 직접 고르기">`:''}</div>`:''}${help}</div>`;
  }
  return `<div class="fld">${lab}<input type="text" id="${id}" value="${esc(v)}" placeholder="${esc(f.ph||'')}" ${f.num?'inputmode="numeric"':''} ${f.max?`maxlength="${f.max}"`:''}>${help}</div>`;
@@ -948,13 +974,13 @@ function renderStudio(){
  $('#app').innerHTML=`<div class="studio"><aside class="rail">
   ${VIEWER?'':'<button class="btn ghost" data-a="toList">‹ 휴대폰 서랍</button>'}
   <div class="rail-name" id="railname"></div><div id="segwrap"></div>
-  ${VIEWER?'':STANDALONE?'<button class="btn" data-a="exportZip">보기 전용 HTML 내보내기</button><button class="btn ghost" data-a="exportPhone">백업 파일 내보내기</button>':'<button class="btn" data-a="copyLink">링크 복사</button>'}
+  ${VIEWER?'':STANDALONE?'<button class="btn" data-a="exportLink">보기 전용 링크 만들기</button><button class="btn ghost" data-a="exportPhone">백업 파일 내보내기</button>':'<button class="btn" data-a="copyLink">링크 복사</button>'}
   <button class="btn ghost" data-a="lockNow">화면 잠그기</button>
   <p class="hint" id="railhint"></p><div class="savestate" id="savestate" aria-live="polite">${isLocal(PID)?'이 브라우저에만 저장돼요':''}</div>
  </aside><div class="stage" id="stage"><div class="pbox" id="pbox"><div class="phone" id="phone"><div class="screen" id="screen"></div></div></div></div></div>`;
  renderRail(); renderScreen(); fit();
 }
-function fit(){const st=$('#stage'),pb=$('#pbox'),ph=$('#phone');if(!st||!pb)return;const s=Math.max(.3,Math.min(st.clientWidth/414,st.clientHeight/868,1.1));ph.style.transform=`scale(${s})`;pb.style.width=414*s+'px';pb.style.height=868*s+'px';}
+function fit(){const st=$('#stage'),pb=$('#pbox'),ph=$('#phone');document.body.classList.toggle('fullphone',window.innerWidth<=560);document.body.classList.toggle('viewer',!!VIEWER);if(!st||!pb)return;const full=document.body.classList.contains('fullphone');const W=full?390:414,H=full?844:868;const s=Math.max(.3,Math.min(st.clientWidth/W,st.clientHeight/H,full?2:1.1));ph.style.transform=`scale(${s})`;pb.style.width=W*s+'px';pb.style.height=H*s+'px';}
 new ResizeObserver(()=>fit()).observe(document.documentElement);
 window.addEventListener('resize',fit);
 
@@ -971,9 +997,9 @@ function renderList(){
  if(canWrite) body=`<section class="shelf">${shared}</section>`;
  else {
   const mine=Object.entries(LOCALP).map(([id,d])=>({...d,id})).sort((x,y)=>(y.updatedAt||0)-(x.updatedAt||0));
-  body=`<section class="sec"><div class="sec-head"><div><h2>내 휴대폰</h2><p>이 브라우저에만 저장돼요. 다른 기기나 다른 사람에게는 보이지 않고, 브라우저의 사이트 데이터를 지우면 함께 사라져요.${STANDALONE?' 다른 사람에게 보여 주려면 ‘HTML 내보내기’로 보기 전용 파일을 만들고, 나중에 다시 고치려면 ‘백업’ 파일을 받아 두세요.':''}</p></div><div class="card-acts">${STANDALONE?'<button class="btn" data-a="importPhone">파일 불러오기</button>':''}<button class="btn primary" data-a="newLocal">+ 새 휴대폰</button></div></div>
+  body=`<section class="sec"><div class="sec-head"><div><h2>내 휴대폰</h2><p>이 브라우저에만 저장돼요. 다른 기기나 다른 사람에게는 보이지 않고, 브라우저의 사이트 데이터를 지우면 함께 사라져요.${STANDALONE?' 다른 사람에게 보여 주려면 ‘링크 만들기’로 보기 전용 링크를 만들고, 나중에 다시 고치려면 ‘백업’ 파일을 받아 두세요.':''}</p></div><div class="card-acts">${STANDALONE?'<button class="btn" data-a="importPhone">파일 불러오기</button>':''}<button class="btn primary" data-a="newLocal">+ 새 휴대폰</button></div></div>
   ${STORE_OK?'':'<p class="notice">이 브라우저는 사이트 저장을 막아 두어서, 만든 휴대폰이 창을 닫으면 사라져요.</p>'}
-  <div class="shelf">${mine.length?mine.map(p=>phoneCard(p,`${STANDALONE?`<button class="btn sm ghost" data-a="exportZip" data-id="${esc(p.id)}">HTML 내보내기</button><button class="btn sm ghost" data-a="exportPhone" data-id="${esc(p.id)}">백업</button>`:''}<button class="btn sm ghost" data-a="dupLocal" data-id="${esc(p.id)}">복제</button><button class="btn sm ghost danger" data-a="delLocal" data-id="${esc(p.id)}">삭제</button>`)).join(''):`<div class="empty"><b>아직 만든 휴대폰이 없어요</b>${STANDALONE?'‘새 휴대폰’을 누르거나, 내보내기로 받은 휴대폰 파일을 불러와서 시작하세요.':'‘새 휴대폰’을 누르거나, 아래 둘러보기에서 마음에 드는 휴대폰을 내 폰으로 복사해서 시작하세요.'}</div>`}</div></section>
+  <div class="shelf">${mine.length?mine.map(p=>phoneCard(p,`${STANDALONE?`<button class="btn sm ghost" data-a="exportLink" data-id="${esc(p.id)}">링크 만들기</button><button class="btn sm ghost" data-a="exportPhone" data-id="${esc(p.id)}">백업</button>`:''}<button class="btn sm ghost" data-a="dupLocal" data-id="${esc(p.id)}">복제</button><button class="btn sm ghost danger" data-a="delLocal" data-id="${esc(p.id)}">삭제</button>`)).join(''):`<div class="empty"><b>아직 만든 휴대폰이 없어요</b>${STANDALONE?'‘새 휴대폰’을 누르거나, 내보내기로 받은 휴대폰 파일을 불러와서 시작하세요.':'‘새 휴대폰’을 누르거나, 아래 둘러보기에서 마음에 드는 휴대폰을 내 폰으로 복사해서 시작하세요.'}</div>`}</div></section>
   ${STANDALONE?'':`<section class="sec"><div class="sec-head"><div><h2>둘러보기</h2><p>주인이 만들어 공유한 휴대폰이에요. 열어서 구경할 수 있고, 내 폰으로 복사하면 고쳐 쓸 수 있어요.</p></div></div><div class="shelf">${shared}</div></section>`}`;
  }
  $('#app').innerHTML=`<main class="lib"><header class="lib-head"><div><p class="eyebrow">OC Phone</p><h1>휴대폰 서랍</h1><p class="lede">캐릭터마다 휴대폰을 하나씩 만들어 보세요. 잠금 화면부터 메시지, 메일, 일기까지 모두 직접 고칠 수 있어요.</p></div>${canWrite?'<button class="btn primary" data-a="newPhone">+ 새 휴대폰</button>':''}</header>${body}</main>`;
@@ -1004,7 +1030,7 @@ function applyPending(){
  lastSaved=pendingRemote; P=normalize(JSON.parse(pendingRemote)); pendingRemote=null; renderRail(); renderScreen();
 }
 document.addEventListener('focusout',()=>setTimeout(applyPending,50));
-window.addEventListener('hashchange',()=>{if(VIEWER)return;const h=readHash();if(h!==(PID||''))openPhoneId(h);});
+window.addEventListener('hashchange',()=>{if(STANDALONE&&isViewHash(location.hash.slice(1))){location.reload();return;}if(VIEWER)return;const h=readHash();if(h!==(PID||''))openPhoneId(h);});
 function goHash(id){ try{ if(id) location.hash=id; else history.replaceState(null,'',location.pathname+location.search); }catch(e){} if((id||'')!==(PID||'')) openPhoneId(id); }
 
 /* ---------------- navigation inside phone ---------------- */
@@ -1186,9 +1212,12 @@ const A={
  acceptCall:()=>acceptCall(),
  declineCall:()=>endCall('declined'),
  endCall:()=>endCall('done'),
- exportZip:el=>{ const id=el.dataset.id||PID; const d=(PID===id&&P)?P:LOCALP[id]; if(d) exportZip(clone(d)); },
+ exportLink:async el=>{ const id=el.dataset.id||PID; const d=(PID===id&&P)?P:LOCALP[id]; if(!d) return; try{ await makeViewLink(d); }catch(e){ toast('링크를 만들지 못했어요.'); } },
+ copyView:()=>{ const s=SHEETS[SHEETS.length-1]; const box=$('#linkbox'); try{ navigator.clipboard.writeText(s.url).then(()=>toast('링크를 복사했어요.'),()=>{box.select();toast('링크를 길게 눌러 복사해 주세요.');}); }catch(e){ box.select(); toast('링크를 길게 눌러 복사해 주세요.'); } },
+ shareView:()=>{ const s=SHEETS[SHEETS.length-1]; navigator.share({title:s.name||'OC Phone',url:s.url}).catch(()=>{}); },
+ urlImg:el=>{ const k=el.dataset.k; const parent=SHEETS[SHEETS.length-1]; openForm({title:'사진 주소로 넣기',autofocus:true,note:'인터넷에 올라가 있는 사진의 주소를 넣어요. 이렇게 넣은 사진은 보기 전용 링크에서도 보여요.\n예: GitHub 저장소에 사진을 올린 뒤 그 사진의 주소',values:{u:''},fields:[{k:'u',l:'사진 주소 (https://로 시작)',ph:'https://아이디.github.io/저장소/photo.jpg'}],onSave(v){ const u=String(v.u||'').trim(); if(!/^https:\/\/\S+$/.test(u)){toast('https://로 시작하는 주소를 넣어 주세요.');return false;} parent.st[k]=u; }}); },
  exportPhone:el=>{ const id=el.dataset.id||PID; const d=(PID===id&&P)?P:LOCALP[id]; if(!d) return; const name=String(d.name||'phone').replace(/[\\/:*?"<>|]/g,'_'); const blob=new Blob([JSON.stringify({app:'ocphone',v:1,phone:d})],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name+'.ocphone.json'; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500); toast('휴대폰 파일을 내보냈어요.'); },
- importPhone:()=>{ const f=$('#jsonpick'); f.onchange=async()=>{ const file=f.files[0]; f.value=''; if(!file) return; try{ const o=JSON.parse(await file.text()); const d=o&&o.phone?o.phone:o; if(!d||!d.lock||!d.home) throw 0; d.updatedAt=Date.now(); LOCALP['L'+uid()]=normalize(d); if(!persistLocal()) return; renderList(); toast('휴대폰을 불러왔어요.'); }catch(e){ toast('휴대폰 파일이 아니에요. ‘백업’으로 받은 .json 파일을 골라 주세요. 보기 전용 HTML 파일은 불러올 수 없어요.'); } }; f.click(); },
+ importPhone:()=>{ const f=$('#jsonpick'); f.onchange=async()=>{ const file=f.files[0]; f.value=''; if(!file) return; try{ const o=JSON.parse(await file.text()); const d=o&&o.phone?o.phone:o; if(!d||!d.lock||!d.home) throw 0; d.updatedAt=Date.now(); LOCALP['L'+uid()]=normalize(d); if(!persistLocal()) return; renderList(); toast('휴대폰을 불러왔어요.'); }catch(e){ toast('휴대폰 파일이 아니에요. ‘백업’으로 받은 .json 파일을 골라 주세요. 보기 전용 링크는 불러올 수 없어요.'); } }; f.click(); },
  newLocal:()=>{ const id='L'+uid(); LOCALP[id]=template(); persistLocal(); goHash(id); editMode=true; renderRail(); renderScreen(); toast('새 휴대폰을 만들었어요. 지금은 편집 모드예요.'); },
  dupLocal:el=>{ const o=LOCALP[el.dataset.id]; if(!o) return; const d=clone(o); d.name=(d.name||'')+' 사본'; d.createdAt=d.updatedAt=Date.now(); LOCALP['L'+uid()]=d; persistLocal(); renderList(); toast('복제했어요.'); },
  delLocal:el=>{ const o=LOCALP[el.dataset.id]; if(!o) return; openConfirm('휴대폰 지우기',`‘${o.name}’을(를) 지울까요? 이 브라우저에서 사라지고 되돌릴 수 없어요.`,'지우기',()=>{ delete LOCALP[el.dataset.id]; persistLocal(); closeSheets(); renderList(); toast('지웠어요.'); }); },
@@ -1293,6 +1322,10 @@ document.addEventListener('pointerup',e=>{if(swipeY!=null&&swipeY-e.clientY>40&&
 
 /* ---------------- boot ---------------- */
 (async function boot(){
+ if(STANDALONE&&!VIEWER&&isViewHash(location.hash.slice(1))){
+  try{ const d=await unpackPhone(location.hash.slice(1)); VIEWER=true; READY=true; LOCAL=true; canWrite=false; PID='view'; P=normalize(d); document.title=P.name||document.title; render(); return; }
+  catch(e){ $('#app').innerHTML='<main class="lib"><div class="empty"><b>링크를 열 수 없어요</b>링크가 중간에 잘렸거나 이 브라우저가 너무 오래됐어요. 링크 전체를 다시 복사해서 열어 보세요.</div></main>'; return; }
+ }
  if(VIEWER){ READY=true; LOCAL=true; canWrite=false; PID='view'; P=normalize(clone(VIEWER_DATA)); document.title=P.name||document.title; render(); return; }
  render();
  const C=STANDALONE?null:window.claude; const use=n=>C&&C.use?C.use(n).catch(()=>null):Promise.resolve(null);
